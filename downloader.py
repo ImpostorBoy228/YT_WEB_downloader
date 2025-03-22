@@ -153,7 +153,7 @@ class YouTubeBackup:
         except Exception as e:
             print(f"❌ Ошибка при массовой загрузке: {e}")
 
-    def search_and_download(self, query, max_results=10):
+    def search_and_download(self, query, max_results=10, min_views=0, min_duration=0, max_duration=float('inf')):
         try:
             search_request = self.youtube_service.search().list(
                 q=query,
@@ -165,7 +165,21 @@ class YouTubeBackup:
 
             for item in search_response['items']:
                 video_id = item['id']['videoId']
-                print(f"Найдено видео: {item['snippet']['title']}")
+                video_info = self.get_video_info(video_id)
+                if not video_info:
+                    continue
+
+                # Фильтр по просмотрам
+                if video_info['views'] < min_views:
+                    print(f"⚠️ Пропущено видео '{video_info['title']}' из-за недостаточного количества просмотров ({video_info['views']})")
+                    continue
+
+                # Фильтр по длительности
+                if video_info['duration'] < min_duration or video_info['duration'] > max_duration:
+                    print(f"⚠️ Пропущено видео '{video_info['title']}' из-за неподходящей длины ({video_info['duration']} секунд)")
+                    continue
+
+                print(f"✅ Найдено видео: {video_info['title']} ({video_info['duration']} сек) с {video_info['views']} просмотрами")
                 self.process_video(video_id)
                 
         except HttpError as e:
@@ -192,7 +206,10 @@ def main():
     elif choice == '3':
         query = input("Введите поисковый запрос: ")
         count = int(input("Количество видео для загрузки: "))
-        backup.search_and_download(query, count)
+        min_views = int(input("Введите минимальное количество просмотров: "))
+        min_duration = int(input("Введите минимальную длительность видео (в секундах): "))
+        max_duration = int(input("Введите максимальную длительность видео (в секундах): "))
+        backup.search_and_download(query, count, min_views, min_duration, max_duration)
     else:
         print("❌ Неверный выбор")
 
