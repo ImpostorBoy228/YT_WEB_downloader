@@ -9,10 +9,7 @@ from google.oauth2 import service_account
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import scoped_session, sessionmaker
 from datetime import datetime
-
-
 import yt_dlp
-
 
 # Конфигурация
 CONFIG = {
@@ -25,100 +22,108 @@ CONFIG = {
 engine = create_engine(CONFIG['db_uri'])
 db = scoped_session(sessionmaker(bind=engine))
 
-# Авторизация через сервисный аккаунт
-def get_youtube_service():
-    credentials = service_account.Credentials.from_service_account_file(
-        CONFIG['service_account_file'],
-        scopes=["https://www.googleapis.com/auth/youtube.force-ssl"]
-    )
-    return build('youtube', 'v3', credentials=credentials)
-
-# Конвертация ISO 8601 -> секунды
-def parse_duration(duration):
-    try:
-        return int(isodate.parse_duration(duration).total_seconds())
-    except:
-        return 0
-
-# Сохранение данных о видео в БД
-def save_video_to_db(video_id, title, description, uploader, views, duration, upload_date):
-    try:
-        db.execute(text("""
-            INSERT INTO videos (id, title, description, uploader, views, duration, upload_date)
-            VALUES (:id, :title, :description, :uploader, :views, :duration, :upload_date)
-            ON CONFLICT (id) DO NOTHING;
-        """), {
-            "id": video_id,
-            "title": title,
-            "description": description,
-            "uploader": uploader,
-            "views": views,
-            "duration": duration,
-            "upload_date": datetime.strptime(upload_date, '%Y-%m-%dT%H:%M:%SZ')
-        })
-        db.commit()
-        print(f"✅ Видео '{title}' добавлено в базу данных.")
-    except Exception as e:
-        print(f"❌ Ошибка при добавлении видео в базу данных: {e}")
-
-# Загрузка превью
-def download_thumbnail(thumbnail_url, thumbnail_path):
-    try:
-        print(f"Загружаем превью с URL: {thumbnail_url}")
-        response = requests.get(thumbnail_url)
-        if response.status_code == 200:
-            with open(thumbnail_path, 'wb') as f:
-                f.write(response.content)
-            print(f"✅ Превью загружено: {thumbnail_path}")
-        else:
-            print("❌ Не удалось скачать превью.")
-    except Exception as e:
-        print(f"❌ Ошибка при загрузке превью: {e}")
-
-# Получение данных о видео из YouTube API
-def get_video_info(video_url):
-    try:
-        video_id = video_url.split("v=")[1].split("&")[0]
-
-        youtube = get_youtube_service()
-        video_request = youtube.videos().list(
-            part='snippet,contentDetails,statistics',
-            id=video_id
-        )
-        video_response = video_request.execute()
-
-        if not video_response['items']:
-            print("❌ Не удалось найти видео.")
-            return None, None, None
-
-        video_data = video_response['items'][0]
-        video_title = video_data['snippet']['title']
-        description = video_data['snippet']['description']
-        uploader = video_data['snippet']['channelTitle']
-        views = int(video_data['statistics'].get('viewCount', 0))
-        duration = parse_duration(video_data['contentDetails']['duration'])
-        upload_date = video_data['snippet']['publishedAt']
+class YouTubeBackup:
+    def __init__(self):
+        self.youtube_service = self.get_youtube_service()
         
-        video_file_path = f"{CONFIG['storage_path']}/{video_id}.webm"
-        thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"
-        thumbnail_path = f"{CONFIG['storage_path']}/{video_id}.webp"
+    def get_youtube_service(self):
+        credentials = service_account.Credentials.from_service_account_file(
+            CONFIG['service_account_file'],
+            scopes=["https://www.googleapis.com/auth/youtube.force-ssl"]
+        )
+        return build('youtube', 'v3', credentials=credentials)
 
-        download_thumbnail(thumbnail_url, thumbnail_path)
-        save_video_to_db(video_id, video_title, description, uploader, views, duration, upload_date)
+    def parse_duration(self, duration):
+        try:
+            return int(isodate.parse_duration(duration).total_seconds())
+        except:
+            return 0
 
-        return video_title, video_file_path
+    def save_video_to_db(self, video_id, title, description, uploader, views, duration, upload_date):
+        try:
+            db.execute(text("""
+                INSERT INTO videos (id, title, description, uploader, views, duration, upload_date)
+                VALUES (:id, :title, :description, :uploader, :views, :duration, :upload_date)
+                ON CONFLICT (id) DO NOTHING;
+            """), {
+                "id": video_id,
+                "title": title,
+                "description": description,
+                "uploader": uploader,
+                "views": views,
+                "duration": duration,
+                "upload_date": datetime.strptime(upload_date, '%Y-%m-%dT%H:%M:%SZ')
+            })
+            db.commit()
+            print(f"✅ Видео '{title}' добавлено в базу данных.")
+        except Exception as e:
+            print(f"❌ Ошибка при добавлении видео в базу данных: {e}")
 
-    except HttpError as e:
-        print(f"❌ Ошибка API: {e}")
-        return None, None
+    def download_thumbnail(self, video_id):
+        try:
+            thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"
+            thumbnail_path = f"{CONFIG['storage_path']}/{video_id}.webp"
+            
+            response = requests.get(thumbnail_url)
+            if response.status_code == 200:
+                with open(thumbnail_path, 'wb') as f:
+                    f.write(response.content)
+                print(f"✅ Превью загружено: {thumbnail_path}")
+            else:
+                print("❌ Не удалось скачать превью.")
+        except Exception as e:
+            print(f"❌ Ошибка при загрузке превью: {e}")
 
-# Загрузка видео с помощью yt-dlp
-def download_video(video_url):
-    video_title, video_file_path = get_video_info(video_url)
+    def get_video_info(self, video_id):
+        try:
+            video_request = self.youtube_service.videos().list(
+                part='snippet,contentDetails,statistics',
+                id=video_id
+            )
+            video_response = video_request.execute()
 
-    if video_title:
-        print(f"✅ Видео '{video_title}' найдено. Начинаю загрузку...")
+            if not video_response['items']:
+                return None
 
+            video_data = video_response['items'][0]
+            return {
+                'title': video_data['snippet']['title'],
+                'description': video_data['snippet']['description'],
+                'uploader': video_data['snippet']['channelTitle'],
+                'views': int(video_data['statistics'].get('viewCount', 0)),
+                'duration': self.parse_duration(video_data['contentDetails']['duration']),
+                'upload_date': video_data['snippet']['publishedAt']
+            }
+        except HttpError as e:
+            print(f"❌ Ошибка API: {e}")
+            return None
+
+    def process_video(self, video_id):
+        if self.check_video_exists(video_id):
+            print(f"⚠️ Видео {video_id} уже существует в базе. Пропускаем.")
+            return
+
+        video_info = self.get_video_info(video_id)
+        if not video_info:
+            return
+
+        self.download_thumbnail(video_id)
+        self.save_video_to_db(
+            video_id,
+            video_info['title'],
+            video_info['description'],
+            video_info['uploader'],
+            video_info['views'],
+            video_info['duration'],
+            video_info['upload_date']
+        )
+        self.download_video(video_id)
+
+    def check_video_exists(self, video_id):
+        result = db.execute(text("SELECT 1 FROM videos WHERE id = :id"), {"id": video_id})
+        return result.fetchone() is not None
+
+    def download_video(self, video_id):
         output_template = f"{CONFIG['storage_path']}/%(id)s.%(ext)s"
         ydl_opts = {
             'format': 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best',
@@ -131,16 +136,65 @@ def download_video(video_url):
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([video_url])
-            print(f"✅ Видео успешно загружено.")
+                ydl.download([f'https://youtube.com/watch?v={video_id}'])
+            print(f"✅ Видео {video_id} успешно загружено.")
         except Exception as e:
-            print(f"❌ Ошибка при загрузке видео: {e}")
-    else:
-        print("❌ Не удалось скачать видео.")
-# Основная функция
+            print(f"❌ Ошибка при загрузке видео {video_id}: {e}")
+
+    def mass_download(self, input_file):
+        try:
+            with open(input_file, 'r') as f:
+                urls = f.read().splitlines()
+            
+            for url in urls:
+                if 'v=' in url:
+                    video_id = url.split('v=')[1].split('&')[0]
+                    self.process_video(video_id)
+        except Exception as e:
+            print(f"❌ Ошибка при массовой загрузке: {e}")
+
+    def search_and_download(self, query, max_results=10):
+        try:
+            search_request = self.youtube_service.search().list(
+                q=query,
+                part='id,snippet',
+                maxResults=max_results,
+                type='video'
+            )
+            search_response = search_request.execute()
+
+            for item in search_response['items']:
+                video_id = item['id']['videoId']
+                print(f"Найдено видео: {item['snippet']['title']}")
+                self.process_video(video_id)
+                
+        except HttpError as e:
+            print(f"❌ Ошибка при поиске: {e}")
+
 def main():
-    video_url = input("Введите ссылку на видео YouTube: ")
-    download_video(video_url)
+    backup = YouTubeBackup()
+    
+    print("Выберите режим работы:")
+    print("1 - Загрузить одно видео")
+    print("2 - Массовая загрузка из файла")
+    print("3 - Поиск и загрузка по запросу")
+    
+    choice = input("Ваш выбор: ")
+    
+    if choice == '1':
+        url = input("Введите URL видео: ")
+        if 'v=' in url:
+            video_id = url.split('v=')[1].split('&')[0]
+            backup.process_video(video_id)
+    elif choice == '2':
+        file_path = input("Введите путь к файлу с URL: ")
+        backup.mass_download(file_path)
+    elif choice == '3':
+        query = input("Введите поисковый запрос: ")
+        count = int(input("Количество видео для загрузки: "))
+        backup.search_and_download(query, count)
+    else:
+        print("❌ Неверный выбор")
 
 if __name__ == "__main__":
     main()
